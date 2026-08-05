@@ -122,9 +122,32 @@ Drag a video in, watch the stages stream past, download the result. Conversions
 run on a worker thread and report progress over server-sent events, so a
 multi-minute job stays responsive.
 
-It's built for local use — jobs live in temp directories, are held in memory,
-and are reaped an hour after they finish. Put a real WSGI server and an
-authenticating proxy in front of it before exposing it to a network.
+`--serve` is Flask's development server. To put it on the internet, see below.
+
+## Hosting it
+
+The matte runs a segmentation model and shells out to ffmpeg, so this needs a
+real server — there's no static-hosting version. The repo ships a `Dockerfile`
+with the models baked in, and configs for a few hosts in [`deploy/`](deploy/):
+
+```bash
+docker build -t vidsticker .
+docker run -p 8000:7860 vidsticker      # http://localhost:8000
+```
+
+**Free option: Hugging Face Spaces.** Free CPU Spaces get 2 vCPU and 16 GB RAM —
+the only free tier here that clears the memory requirement. Copy
+`deploy/huggingface/README.md` over the Space's `README.md` (its YAML header is
+what selects the Docker build and the port), then push.
+
+Fly.io (`deploy/fly.toml`) and Render (`deploy/render.yaml`) are set up too.
+Skip Render's free tier — 512 MB gets killed loading the model.
+
+Whatever you pick: **2 GB RAM minimum**, budget about a second per frame per
+core, and run a **single worker** with threads. Jobs and their progress streams
+live in process memory, so a second worker fields requests for jobs it can't
+see. [`deploy/DEPLOY.md`](deploy/DEPLOY.md) has the details, including what to
+change before exposing it publicly — there is no authentication in front of it.
 
 ## Python API
 

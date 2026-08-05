@@ -1,0 +1,14 @@
+.git
+.github
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+.venv
+venv
+out
+tests
+examples
+deploy
+.DS_Store

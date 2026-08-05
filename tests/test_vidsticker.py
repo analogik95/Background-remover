@@ -7,6 +7,8 @@ The end-to-end tests build a synthetic green-screen clip and run it through in
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -468,6 +470,100 @@ def test_progress_reports_every_stage(clip, tmp_path):
     create_sticker(clip, tmp_path, opts, stem="p",
                    progress=lambda s, d, t: seen.append(s))
     assert {"probe", "decode", "matte", "analyse", "compose", "encode"} <= set(seen)
+
+
+# --- web app ---------------------------------------------------------------
+
+@pytest.fixture
+def client():
+    from vidsticker import web
+    web.JOBS.clear()
+    return web.create_app().test_client()
+
+
+def _upload(client, clip, **fields):
+    data = {"mode": "chroma", "size": "96", "formats": "gif",
+            "video": (clip.open("rb"), "my clip.mp4")}
+    data.update(fields)
+    return client.post("/api/jobs", data=data, content_type="multipart/form-data")
+
+
+def test_index_renders(client):
+    assert client.get("/").status_code == 200
+
+
+def test_upload_without_a_file_is_a_400(client):
+    assert client.post("/api/jobs", data={}).get_json()["error"]
+
+
+def test_bad_option_is_rejected_before_any_work(client, clip):
+    r = _upload(client, clip, mode="nonsense")
+    assert r.status_code == 400
+    assert "mode must be one of" in r.get_json()["error"]
+
+
+def test_upload_converts_and_serves_the_result(client, clip):
+    from vidsticker import web
+    job = _upload(client, clip).get_json()
+    for _ in range(600):
+        state = client.get(f"/api/jobs/{job['id']}").get_json()
+        if state["state"] in ("done", "error"):
+            break
+        time.sleep(0.1)
+    assert state["state"] == "done", state.get("error")
+    assert state["progress"] == 1.0
+
+    files = state["result"]["files"]
+    assert [f["format"] for f in files] == ["gif"]
+    body = client.get(files[0]["url"])
+    assert body.status_code == 200 and body.data[:6] == b"GIF89a"
+
+
+def test_downloads_cannot_escape_the_job_directory(client, tmp_path):
+    from vidsticker import web
+    job = web.Job(id="esc", name="n", dir=tmp_path)
+    (tmp_path / "out").mkdir()
+    (tmp_path / "secret.txt").write_text("no")
+    web.JOBS["esc"] = job
+    assert client.get("/api/jobs/esc/file/secret.txt").status_code == 404
+    assert client.get("/api/jobs/esc/file/..%2Fsecret.txt").status_code == 404
+
+
+def test_unknown_job_is_a_404(client):
+    assert client.get("/api/jobs/nope").status_code == 404
+    assert client.get("/api/jobs/nope/events").status_code == 404
+
+
+def test_jobs_beyond_the_concurrency_cap_wait_their_turn(client, clip, monkeypatch):
+    """A busy host must queue extra uploads, not run them all at once."""
+    from vidsticker import web
+
+    running = []
+    peak = 0
+    lock = threading.Lock()
+
+    def slow(*a, **kw):
+        nonlocal peak
+        with lock:
+            running.append(1)
+            peak = max(peak, len(running))
+        time.sleep(0.4)
+        with lock:
+            running.pop()
+        raise RuntimeError("stopped before encoding")   # we only care about scheduling
+
+    monkeypatch.setattr(web, "create_sticker", slow)
+    monkeypatch.setattr(web, "_slots", threading.Semaphore(2))
+
+    jobs = [_upload(client, clip).get_json() for _ in range(5)]
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        states = [client.get(f"/api/jobs/{j['id']}").get_json()["state"] for j in jobs]
+        if all(s in ("done", "error") for s in states):
+            break
+        time.sleep(0.1)
+    assert peak <= 2, f"{peak} conversions ran at once despite a cap of 2"
+    assert len(jobs) == 5
 
 
 def test_work_directory_is_cleaned_up(clip, tmp_path):

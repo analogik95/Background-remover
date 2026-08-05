@@ -7,6 +7,7 @@ multi-minute conversion reports live instead of hanging on a request.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import shutil
 import tempfile
@@ -22,8 +23,13 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 from .matting import MatteConfig
 from .pipeline import FORMATS, StickerOptions, create_sticker
 
-MAX_UPLOAD_MB = 256
-JOB_TTL_SECONDS = 60 * 60
+MAX_UPLOAD_MB = int(os.environ.get("VIDSTICKER_MAX_UPLOAD_MB", "256"))
+JOB_TTL_SECONDS = int(os.environ.get("VIDSTICKER_JOB_TTL", str(60 * 60)))
+# Matting is CPU-bound and saturates the cores it gets. Letting every upload
+# start at once on a shared host just makes them all slow, so past this many
+# they wait their turn.
+MAX_CONCURRENT_JOBS = int(os.environ.get("VIDSTICKER_MAX_JOBS", "2"))
+_slots = threading.Semaphore(MAX_CONCURRENT_JOBS)
 STAGES = ["probe", "decode", "model", "matte", "analyse", "compose", "encode"]
 # Rough share of total runtime per stage, so the bar advances evenly rather than
 # sitting at 5% through the long matting pass.
@@ -83,7 +89,10 @@ def _run(job: Job, src: Path, opts: StickerOptions) -> None:
         job.progress = _overall(stage, done, total)
         job.emit()
 
+    acquired = _slots.acquire(timeout=JOB_TTL_SECONDS)
     try:
+        if not acquired:
+            raise RuntimeError("the server is busy; try again in a few minutes")
         job.state = "running"
         job.emit()
         res = create_sticker(src, job.dir / "out", opts, progress=progress, stem=job.name)
@@ -102,6 +111,8 @@ def _run(job: Job, src: Path, opts: StickerOptions) -> None:
     except Exception as exc:
         job.state, job.error = "error", str(exc)
     finally:
+        if acquired:
+            _slots.release()
         job.emit()
 
 
@@ -213,6 +224,7 @@ def create_app() -> Flask:
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
+    """Development server. For a deployment see deploy/DEPLOY.md."""
     app = create_app()
     print(f"vidsticker UI  ->  http://{host}:{port}")
     app.run(host=host, port=port, threaded=True)

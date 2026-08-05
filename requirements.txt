@@ -4,3 +4,6 @@ pillow>=10.0
 rembg>=2.0.50
 onnxruntime>=1.16
 flask>=3.0
+
+# Serving it for real (see deploy/DEPLOY.md); not needed for the CLI.
+gunicorn>=21.2

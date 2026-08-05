@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: vidsticker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Not `free`: that tier is 512 MB and gets killed loading the model.
+    # onnxruntime plus an isnet session needs ~1.5 GB.
+    plan: standard
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "7860"
+      - key: VIDSTICKER_MAX_JOBS
+        value: "2"

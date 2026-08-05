@@ -1,0 +1,32 @@
+﻿# fly launch --no-deploy --copy-config --config deploy/fly.toml && fly deploy
+app = "vidsticker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "../Dockerfile"
+
+[env]
+  PORT = "7860"
+  VIDSTICKER_MAX_JOBS = "1"
+
+[http_service]
+  internal_port = 7860
+  force_https = true
+  # Matting is bursty and idle the rest of the time; stopping the machine
+  # between jobs costs a cold start and nothing else.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 4
+    hard_limit = 8
+
+[[vm]]
+  size = "shared-cpu-2x"
+  # onnxruntime plus an isnet session needs ~1.5 GB; 1 GB OOMs mid-matte.
+  memory = "2gb"
+
+# A conversion holds its progress stream open for minutes. Fly's default health
+# check is fine, but don't add a short request timeout in front of it.
