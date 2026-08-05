@@ -168,11 +168,18 @@ What each stage contributed:
 - **`isnet-anime`** over the default model closed the interior gaps — the slot
   between a sleeve and a forearm, which the general model filled in solid.
 
-A compact variant for messaging apps with size limits:
+A compact variant for messaging apps with size limits — `examples/luffy-sticker-small.gif`,
+180×320 at 1.32 MB:
 
 ```bash
 vidsticker luffy.mp4 --size 320 --fps 12.5 --colors 160
 ```
+
+What's left: 28 pixels on the busiest frame still carry a faint green cast, all
+of them sitting on the 1-pixel silhouette outline, with a green excess of ≤21/255.
+That's the antialiasing spill `--despill 0.8` deliberately leaves behind; push it
+to `1.0` to clamp it fully, at the cost of desaturating anything on the subject
+that is legitimately green.
 
 ## Tuning a stubborn clip
 
