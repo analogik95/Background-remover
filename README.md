@@ -149,11 +149,12 @@ hundredths of a second — a 24 fps source wants 4.1666 cs and every decoder
 rounds it differently, so when GIF is a target vidsticker resamples to the
 nearest rate GIF can represent exactly (25 fps here). Clip length is preserved.
 
-**WebP and APNG carry real 8-bit alpha**, so soft edges survive instead of being
-cut to a hard 1-bit stencil. WebP is smaller than the GIF as well (5.7 MB vs
-7.1 MB on the example below, and the gap widens as you drop `--webp-quality`).
-APNG is lossless and much larger. If whatever you're pasting into takes WebP,
-prefer it — GIF is the compatibility option, not the good one.
+**WebP and APNG carry real 8-bit alpha**, so soft edges — and motion blur, which
+is just a very wide soft edge — survive instead of being cut to a hard 1-bit
+stencil. WebP is smaller than the GIF as well (5.28 MB vs 6.69 MB on the example
+below, and the gap widens as you drop `--webp-quality`). APNG is lossless and
+much larger. If whatever you're pasting into takes WebP, prefer it — GIF is the
+compatibility option, not the good one.
 
 ## Worked example
 
@@ -168,9 +169,23 @@ vidsticker luffy.mp4 -o examples --model isnet-anime --formats gif webp
 ```
 Matte: hybrid (chroma key Cr/Cb 84/101)
 Output: 150 frames @ 25 fps, 288x512 px
-  gif   examples/luffy-sticker.gif   (7.11 MB)
-  webp  examples/luffy-sticker.webp  (5.73 MB)
+  gif   examples/luffy-sticker.gif   (6.69 MB)
+  webp  examples/luffy-sticker.webp  (5.28 MB)
 ```
+
+Counting opaque pixels that still read as backdrop-coloured, over every output
+frame:
+
+| output | frames | opaque px | backdrop-coloured |
+|---|---:|---:|---:|
+| GIF | 150 | 8,320,453 | 8,915 (0.107%) |
+| WebP | 144 | 7,986,949 | **144 (0.002%)** |
+
+The GIF's remaining tenth of a percent is all on the fast-swinging arms, and it
+is the 1-bit alpha, not the matte: motion blur is real partial coverage, and
+forcing it through a hard threshold both stipples the arm and keeps the
+backdrop's half of the pixels it rounds up. WebP, from the identical frames,
+carries the same blur as actual translucency.
 
 What each stage contributed:
 
@@ -178,26 +193,25 @@ What each stage contributed:
   the key has no reason to drop them.
 - **Neural matte alone** dropped the sparkles but left a green fringe hugging
   the silhouette.
-- **The hybrid** cleared both. Measured over all 150 output frames, 4 opaque
-  pixels remain that are green-dominant, out of ~8.4 million.
 - **Per-frame keying** mattered here: the rays wash the backdrop out as the clip
   runs, moving the key from Cr/Cb 59/93 to 86/103. Held at one clip-wide key,
   the opening frames' backdrop stayed 80% opaque.
+- **Fitting the ramp** is what made the motion-blur frames work. On this clip the
+  background sits ≤11 chroma units from the key, blurred edges land near 29, and
+  the subject starts at 61 — so a ramp saturating at 28, as a fixed 8/20 does,
+  falls squarely in the blur and writes it out as opaque backdrop.
+- **Clamping the temporal median** to the current frame. Left as a plain median,
+  the frames either side out-voted the current one wherever an arm was swinging,
+  painting its other position onto the backdrop: 18 stray pixels became 15,282.
 - **`isnet-anime`** over the default model closed the interior gaps — the slot
   between a sleeve and a forearm, which the general model filled in solid.
 
 A compact variant for messaging apps with size limits — `examples/luffy-sticker-small.gif`,
-180×320 at 1.32 MB:
+180×320 at 1.29 MB:
 
 ```bash
 vidsticker luffy.mp4 --size 320 --fps 12.5 --colors 160
 ```
-
-What's left: 28 pixels on the busiest frame still carry a faint green cast, all
-of them sitting on the 1-pixel silhouette outline, with a green excess of ≤21/255.
-That's the antialiasing spill `--despill 0.8` deliberately leaves behind; push it
-to `1.0` to clamp it fully, at the cost of desaturating anything on the subject
-that is legitimately green.
 
 ## Tuning a stubborn clip
 
@@ -207,7 +221,7 @@ that is legitimately green.
 | holes in the subject | lower `--tolerance`; the subject may share the backdrop's colour |
 | background survives in patches | `--mode ai`, or a model better matched to the subject |
 | background survives in *interior gaps* | a stronger model — `isnet-anime`, `birefnet-general` |
-| jagged GIF edges | lower `--alpha-threshold` (~96), or output WebP |
+| jagged GIF edges, or motion blur breaking up | lower `--alpha-threshold` (~96), or output WebP |
 | file too big | `--size 320`, `--fps 15`, `--colors 128` |
 | edges flicker between frames | ensure `--no-smooth` is *not* set |
 
