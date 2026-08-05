@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vidsticker — video to transparent sticker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>✂️</text></svg>">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2b303b;
+    --text: #e7e9ee; --muted: #9aa3b2; --accent: #6ee7b7; --accent-2: #38bdf8;
+    --danger: #f87171; --radius: 12px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f6; --line: #dfe3ea;
+      --text: #14181f; --muted: #5c6675; --accent: #0d9488; --accent-2: #0284c7;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 64px; }
+  header h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.02em; }
+  header p { margin: 0 0 28px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 13px; text-transform: uppercase;
+             letter-spacing: 0.08em; color: var(--muted); }
+  #drop {
+    border: 2px dashed var(--line); border-radius: var(--radius);
+    padding: 34px 20px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--panel-2); }
+  #drop .big { font-size: 30px; }
+  #drop .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  #filename { margin-top: 12px; font-size: 13px; color: var(--accent-2);
+              word-break: break-all; min-height: 1.2em; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .field { flex: 1 1 140px; min-width: 120px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input[type=number], select {
+    width: 100%; padding: 8px 10px; border-radius: 8px; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--line); font: inherit;
+  }
+  .checks { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; }
+  .checks label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 14px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+  button.go {
+    width: 100%; padding: 13px; margin-top: 6px; border: 0; border-radius: 10px;
+    background: var(--accent); color: #04120d; font: 600 15px/1 inherit; cursor: pointer;
+  }
+  button.go:disabled { opacity: .5; cursor: not-allowed; }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0;
+             background: linear-gradient(90deg, var(--accent), var(--accent-2));
+             transition: width .25s ease; }
+  #stage { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .checker {
+    background-image:
+      linear-gradient(45deg, rgba(128,128,128,.25) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.25) 75%),
+      linear-gradient(45deg, rgba(128,128,128,.25) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.25) 75%);
+    background-size: 20px 20px; background-position: 0 0, 10px 10px;
+    border-radius: 8px; display: flex; justify-content: center; padding: 12px;
+  }
+  .checker img { max-width: 100%; max-height: 460px; }
+  .files { list-style: none; padding: 0; margin: 14px 0 0; }
+  .files li {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 10px 12px; background: var(--panel-2); border-radius: 8px; margin-bottom: 8px;
+  }
+  .files a { color: var(--accent-2); font-weight: 600; text-decoration: none; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .err { color: var(--danger); font-size: 14px; }
+  .hidden { display: none; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>vidsticker ✂️</h1>
+    <p>Drop in a video, get back an animated sticker with the background cut away.</p>
+  </header>
+
+  <div class="grid">
+    <form class="card" id="form">
+      <h2>Source</h2>
+      <div id="drop">
+        <div class="big">🎬</div>
+        <div><strong>Drop a video</strong> or click to browse</div>
+        <div class="hint">mp4 · mov · webm · gif — up to {{ max_mb }} MB</div>
+        <input type="file" id="file" name="video" accept="video/*" class="hidden">
+      </div>
+      <div id="filename"></div>
+
+      <h2 style="margin-top:22px">Sticker</h2>
+      <div class="row">
+        <div class="field">
+          <label for="size">Longest edge (px)</label>
+          <input type="number" id="size" name="size" value="512" min="16" max="2048">
+        </div>
+        <div class="field">
+          <label for="fps">Frame rate</label>
+          <input type="number" id="fps" name="fps" placeholder="source" min="1" max="50" step="0.5">
+        </div>
+        <div class="field">
+          <label for="mode">Matte</label>
+          <select id="mode" name="mode">
+            <option value="auto">Auto</option>
+            <option value="hybrid">Hybrid (key + AI)</option>
+            <option value="chroma">Chroma key only</option>
+            <option value="ai">AI only</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="checks" style="margin-bottom:12px">
+        <label><input type="checkbox" name="formats" value="gif" checked> GIF</label>
+        <label><input type="checkbox" name="formats" value="webp" checked> WebP</label>
+        <label><input type="checkbox" name="formats" value="apng"> APNG</label>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" name="crop" checked> Crop to subject</label>
+        <label><input type="checkbox" name="square"> Square canvas</label>
+        <label><input type="checkbox" name="smooth" checked> Smooth flicker</label>
+      </div>
+
+      <details>
+        <summary>Advanced matting</summary>
+        <div class="row">
+          <div class="field">
+            <label for="model">Model</label>
+            <select id="model" name="model">
+              <option value="isnet-general-use">isnet (general)</option>
+              <option value="u2net">u2net</option>
+              <option value="u2net_human_seg">u2net (people)</option>
+              <option value="isnet-anime">isnet (anime)</option>
+              <option value="birefnet-general">birefnet (best, slow)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="tolerance">Key tolerance</label>
+            <input type="number" id="tolerance" name="tolerance" value="8" min="0" max="80" step="1">
+          </div>
+          <div class="field">
+            <label for="softness">Edge softness</label>
+            <input type="number" id="softness" name="softness" value="20" min="1" max="120" step="1">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="despill">Spill removal (0–1)</label>
+            <input type="number" id="despill" name="despill" value="0.8" min="0" max="1" step="0.05">
+          </div>
+          <div class="field">
+            <label for="alpha_threshold">GIF alpha cutoff</label>
+            <input type="number" id="alpha_threshold" name="alpha_threshold" value="128" min="1" max="255">
+          </div>
+        </div>
+      </details>
+
+      <button class="go" id="go" type="submit" disabled>Make sticker</button>
+    </form>
+
+    <section class="card" id="panel">
+      <h2>Result</h2>
+      <div id="idle" class="meta">Nothing yet — pick a video to get started.</div>
+
+      <div id="progress" class="hidden">
+        <div class="bar"><i id="fill"></i></div>
+        <div id="stage">Starting…</div>
+      </div>
+
+      <div id="error" class="err hidden"></div>
+
+      <div id="output" class="hidden">
+        <div class="checker"><img id="preview" alt="sticker preview"></div>
+        <div class="meta" id="stats" style="margin-top:12px"></div>
+        <ul class="files" id="files"></ul>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LABELS = {
+  queued: "Queued…", probe: "Reading video", decode: "Extracting frames",
+  model: "Loading model", matte: "Removing background", analyse: "Smoothing matte",
+  compose: "Composing frames", encode: "Encoding sticker", done: "Done",
+};
+
+let chosen = null;
+
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => pick(e.target.files[0]));
+["dragenter", "dragover"].forEach((ev) =>
+  $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) =>
+  $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", (e) => pick(e.dataTransfer.files[0]));
+
+function pick(file) {
+  if (!file) return;
+  chosen = file;
+  $("filename").textContent = `${file.name} · ${(file.size / 1e6).toFixed(1)} MB`;
+  $("go").disabled = false;
+}
+
+function show(el, on) { el.classList.toggle("hidden", !on); }
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!chosen) return;
+
+  const body = new FormData($("form"));
+  body.set("video", chosen);
+  // Unchecked boxes are absent from FormData; the server reads "on"/absent.
+  for (const name of ["crop", "square", "smooth"]) {
+    if (!$("form").querySelector(`[name=${name}]`).checked) body.delete(name);
+  }
+
+  $("go").disabled = true;
+  show($("idle"), false);
+  show($("output"), false);
+  show($("error"), false);
+  show($("progress"), true);
+  $("fill").style.width = "0%";
+  $("stage").textContent = "Uploading…";
+
+  let job;
+  try {
+    const res = await fetch("/api/jobs", { method: "POST", body });
+    job = await res.json();
+    if (!res.ok) throw new Error(job.error || `upload failed (${res.status})`);
+  } catch (err) {
+    return fail(err.message);
+  }
+
+  const es = new EventSource(`/api/jobs/${job.id}/events`);
+  es.onmessage = (ev) => {
+    const s = JSON.parse(ev.data);
+    $("fill").style.width = `${(s.progress * 100).toFixed(1)}%`;
+    $("stage").textContent = LABELS[s.stage] || s.stage;
+    if (s.state === "error") { es.close(); fail(s.error); }
+    if (s.state === "done") { es.close(); finish(s.result); }
+  };
+  es.onerror = () => { es.close(); fail("lost connection to the server"); };
+});
+
+function fail(msg) {
+  show($("progress"), false);
+  show($("error"), true);
+  $("error").textContent = msg;
+  $("go").disabled = false;
+}
+
+function finish(r) {
+  show($("progress"), false);
+  show($("output"), true);
+  const animated = r.files.find((f) => f.format === "gif") || r.files[0];
+  $("preview").src = animated.url;
+  const key = r.key ? ` · key Cr/Cb ${r.key[0]}/${r.key[1]}` : "";
+  $("stats").textContent =
+    `${r.frames} frames · ${r.fps}fps · ${r.width}×${r.height} · matte: ${r.mode}${key}`;
+  $("files").innerHTML = r.files.map((f) => `
+    <li><span>${f.format.toUpperCase()} <span class="meta">${(f.bytes / 1e6).toFixed(2)} MB</span></span>
+        <a href="${f.url}" download="${f.name}">Download</a></li>`).join("");
+  $("go").disabled = false;
+}
+</script>
+</body>
+</html>

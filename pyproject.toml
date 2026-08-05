@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vidsticker"
+version = "1.0.0"
+description = "Turn a video into a transparent animated sticker (GIF / WebP / APNG)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pillow>=10.0",
+    "rembg>=2.0.50",
+    "onnxruntime>=1.16",
+    "flask>=3.0",
+]
+
+[project.scripts]
+vidsticker = "vidsticker.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vidsticker*"]
+
+[tool.setuptools.package-data]
+vidsticker = ["templates/*.html", "static/*"]
