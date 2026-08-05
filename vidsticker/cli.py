@@ -48,13 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--model", default="isnet-general-use", help=f"rembg model (e.g. {', '.join(MODELS[:4])})")
     m.add_argument("--key", nargs=2, type=float, metavar=("CR", "CB"),
                    help="force the chroma key colour instead of detecting it")
-    m.add_argument("--tolerance", type=float, default=8.0, help="chroma radius kept fully transparent (default: 8)")
-    m.add_argument("--softness", type=float, default=20.0, help="chroma edge ramp width (default: 20)")
+    m.add_argument("--tolerance", type=float,
+                   help="chroma radius kept fully transparent (default: fitted per frame)")
+    m.add_argument("--softness", type=float,
+                   help="chroma edge ramp width (default: fitted per frame)")
     m.add_argument("--despill", type=float, default=0.8, help="screen-colour spill removal, 0..1 (default: 0.8)")
     m.add_argument("--feather", type=float, default=0.0, help="blur the matte edge by N px")
     m.add_argument("--shrink", type=float, default=0.0, help="erode the matte by N px to bite off fringing")
     m.add_argument("--no-smooth", dest="smooth", action="store_false",
-                   help="disable the 3-frame temporal median")
+                   help="disable the 3-frame temporal despeckling")
     m.add_argument("--work-size", type=int, default=1280,
                    help="internal matting resolution, longest edge (default: 1280)")
 

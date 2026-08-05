@@ -143,8 +143,8 @@ def create_app() -> Flask:
             matte=MatteConfig(
                 mode=form.get("mode", "auto"),
                 model=form.get("model", "isnet-general-use"),
-                tolerance=num("tolerance", float, 8.0),
-                softness=num("softness", float, 20.0),
+                tolerance=num("tolerance", float, None),
+                softness=num("softness", float, None),
                 despill=num("despill", float, 0.8),
             ),
         )

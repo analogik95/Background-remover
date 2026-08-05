@@ -237,7 +237,7 @@ def create_sticker(src: Path, out_dir: Path, opts: Optional[StickerOptions] = No
         for i in range(len(alphas)):
             a = load_alpha(i)
             if opts.smooth:
-                a = matting.temporal_median(load_alpha(i - 1), a, load_alpha(i + 1))
+                a = matting.temporal_despeckle(load_alpha(i - 1), a, load_alpha(i + 1))
             shape = a.shape
             Image.fromarray((a * 255).astype(np.uint8)).save(final_dir / alphas[i].name)
             b = matting.content_bbox(a)
@@ -263,12 +263,18 @@ def create_sticker(src: Path, out_dir: Path, opts: Optional[StickerOptions] = No
         rgba_dir.mkdir()
         for i, fp in enumerate(raw):
             rgb = np.asarray(Image.open(fp).convert("RGB"))
-            clean = matting.despill(rgb, spill, run_cfg.despill)
             alpha = np.asarray(Image.open(final_dir / fp.name)).astype(np.float32)
+            # Unmixing needs both the matte and a reading of the screen, so it
+            # only applies once there is a key; otherwise fall back to despill.
+            screen = matting.screen_rgb(rgb, alpha / 255.0) if key is not None else None
+            if screen is not None:
+                clean = matting.unmix_screen(rgb, alpha / 255.0, screen, run_cfg.despill)
+            else:
+                clean = matting.despill(rgb, spill, run_cfg.despill)
             frame = np.dstack([clean, alpha])
             im = Image.fromarray(np.clip(frame, 0, 255).astype(np.uint8), "RGBA").crop(crop)
             if im.size != out_size:
-                im = im.resize(out_size, Image.LANCZOS)
+                im = Image.fromarray(matting.resize_rgba(np.asarray(im), out_size), "RGBA")
             im.save(rgba_dir / fp.name)
             tick("compose", i + 1, len(raw))
 

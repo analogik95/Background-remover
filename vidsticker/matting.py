@@ -24,13 +24,25 @@ KeyColor = Tuple[float, float]
 MODES = ("auto", "hybrid", "chroma", "ai")
 
 
+# Fallbacks for when the ramp cannot be calibrated against a neural matte.
+# A saturated key sits roughly 64 chroma units from neutral grey, so the ramp
+# has to span a large part of that distance - a narrow one reaches full opacity
+# midway through the screen-to-subject blend and keeps the backdrop's half of it.
+DEFAULT_TOLERANCE = 10.0
+DEFAULT_SOFTNESS = 45.0
+
+# Bounds on what the per-frame calibration may choose.
+MIN_TOLERANCE, MAX_TOLERANCE = 6.0, 30.0
+MIN_SOFTNESS, MAX_SOFTNESS = 15.0, 120.0
+
+
 @dataclass
 class MatteConfig:
     mode: str = "auto"
     model: str = "isnet-general-use"
     key: Optional[KeyColor] = None
-    tolerance: float = 8.0
-    softness: float = 20.0
+    tolerance: Optional[float] = None   # None = calibrate per frame
+    softness: Optional[float] = None    # None = calibrate per frame
     despill: float = 0.8
     feather: float = 0.0
     shrink: float = 0.0
@@ -39,8 +51,10 @@ class MatteConfig:
     def validate(self) -> None:
         if self.mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, got {self.mode!r}")
-        if self.softness <= 0:
+        if self.softness is not None and self.softness <= 0:
             raise ValueError("softness must be > 0")
+        if self.tolerance is not None and self.tolerance < 0:
+            raise ValueError("tolerance must be >= 0")
         if not 0.0 <= self.despill <= 1.0:
             raise ValueError("despill must be within 0..1")
 
@@ -96,6 +110,41 @@ def chroma_alpha(rgb: np.ndarray, key: KeyColor, tolerance: float, softness: flo
     return np.clip((dist - tolerance) / softness, 0.0, 1.0)
 
 
+def calibrate_ramp(rgb: np.ndarray, key: KeyColor, ai: np.ndarray) -> Optional[Tuple[float, float]]:
+    """Fit the key's ramp to the colour separation this frame actually shows.
+
+    A fixed ramp is guesswork: how far the subject's colours sit from the key
+    depends entirely on the footage. Using the neural matte to label confident
+    foreground and background, we can measure it instead - put the transparent
+    end past the screen's own spread, and reach full opacity right where the
+    subject's colours begin.
+
+    Getting this wrong is what leaves a halo on motion blur. A blurred edge is a
+    genuine mix of subject and screen, so it lands midway between the two in
+    chroma. If the ramp saturates before that midpoint, every blurred edge pixel
+    is written out as fully opaque backdrop.
+    """
+    ycc = _ycrcb(rgb)
+    dist = np.hypot(ycc[..., 1] - key[0], ycc[..., 2] - key[1])
+
+    # Erode both sides: we want pixels that are unambiguously one or the other,
+    # not the soft boundary between them.
+    solid = np.ones((15, 15), np.uint8)
+    fg = cv2.erode((ai > 0.9).astype(np.uint8), solid).astype(bool)
+    bg = cv2.erode((ai < 0.1).astype(np.uint8), solid).astype(bool)
+    if fg.sum() < 500 or bg.sum() < 500:
+        return None
+
+    # p90 rather than the max: an animated backdrop carries overlays (rays,
+    # sparkles) that are nowhere near the key and would otherwise set the floor.
+    spread = float(np.percentile(dist[bg], 90))
+    subject = float(np.percentile(dist[fg], 1))
+
+    tolerance = float(np.clip(spread * 1.5, MIN_TOLERANCE, MAX_TOLERANCE))
+    softness = float(np.clip(subject - tolerance, MIN_SOFTNESS, MAX_SOFTNESS))
+    return tolerance, softness
+
+
 def ai_alpha(session, rgb: np.ndarray) -> np.ndarray:
     """Subject alpha from a rembg segmentation model."""
     from PIL import Image
@@ -138,6 +187,31 @@ def despill(rgb: np.ndarray, channel: Optional[int] = 1, amount: float = 0.8) ->
     return out
 
 
+def screen_rgb(rgb: np.ndarray, alpha: np.ndarray, thresh: float = 0.1) -> Optional[np.ndarray]:
+    """The screen's own colour, as the median of the confidently transparent pixels."""
+    bg = alpha < thresh
+    if bg.sum() < 200:
+        return None
+    return np.median(rgb[bg], axis=0).astype(np.float32)
+
+
+def unmix_screen(rgb: np.ndarray, alpha: np.ndarray, screen: np.ndarray,
+                 amount: float = 1.0, floor: float = 0.15) -> np.ndarray:
+    """Recover the subject's own colour from a pixel that is part screen.
+
+    A partly covered pixel - an antialiased outline, and far more of them on
+    motion blur - is literally `C = a*F + (1-a)*S`. Solving that for F removes
+    exactly the screen's share, where despill only approximates it by clamping a
+    channel. On a blurred edge, which can be half screen, the difference is a
+    visible green fringe versus none.
+    """
+    if amount <= 0:
+        return rgb.astype(np.float32)
+    a = np.maximum(alpha, floor)[..., None]
+    fg = (rgb.astype(np.float32) - (1.0 - a) * screen.reshape(1, 1, 3)) / a
+    return np.clip(rgb.astype(np.float32) * (1.0 - amount) + fg * amount, 0.0, 255.0)
+
+
 def _postprocess(alpha: np.ndarray, cfg: MatteConfig) -> np.ndarray:
     if cfg.shrink > 0:
         k = int(cfg.shrink) * 2 + 1
@@ -164,7 +238,15 @@ def compute_alpha(rgb: np.ndarray, cfg: MatteConfig, session=None,
             if cfg.mode == "chroma":
                 raise ValueError("no chroma key colour found; pass --key or use --mode ai")
         else:
-            ck = chroma_alpha(rgb, key, cfg.tolerance, cfg.softness)
+            tolerance, softness = cfg.tolerance, cfg.softness
+            if (tolerance is None or softness is None) and alpha is not None:
+                fitted = calibrate_ramp(rgb, key, alpha)
+                if fitted:
+                    tolerance = cfg.tolerance if cfg.tolerance is not None else fitted[0]
+                    softness = cfg.softness if cfg.softness is not None else fitted[1]
+            ck = chroma_alpha(rgb, key,
+                              DEFAULT_TOLERANCE if tolerance is None else tolerance,
+                              DEFAULT_SOFTNESS if softness is None else softness)
             alpha = ck if alpha is None else np.minimum(alpha, ck)
 
     if alpha is None:
@@ -172,18 +254,44 @@ def compute_alpha(rgb: np.ndarray, cfg: MatteConfig, session=None,
     return _postprocess(alpha, cfg)
 
 
-def temporal_median(prev: Optional[np.ndarray], cur: np.ndarray,
-                    nxt: Optional[np.ndarray]) -> np.ndarray:
-    """Median of three consecutive alphas.
+def temporal_despeckle(prev: Optional[np.ndarray], cur: np.ndarray,
+                       nxt: Optional[np.ndarray]) -> np.ndarray:
+    """Drop coverage that only this frame claims, without inventing any.
 
-    A per-frame neural matte flickers slightly from frame to frame; a 3-tap
-    median removes single-frame speckle without smearing genuine motion the way
-    an average would.
+    A per-frame neural matte flickers: pixels blink opaque for a single frame. A
+    median of three consecutive alphas removes that.
+
+    But a plain median also *adds* coverage, and on fast motion that is ruinous.
+    Where a limb is moving, the two neighbouring frames can agree with each other
+    while the current frame disagrees, so the median paints the limb's other
+    position onto this frame — over backdrop, which then ships as opaque screen
+    colour. On the example clip that turned 18 stray pixels into 15,282.
+
+    Clamping to the current frame keeps the despeckling and drops the invention:
+    a pixel can never come out more opaque than this frame's own matte made it,
+    so it still had to convince both the key and the network *here*.
     """
-    stack = [a for a in (prev, cur, nxt) if a is not None]
-    if len(stack) < 3:
+    if prev is None or nxt is None:
         return cur
-    return np.median(np.stack(stack, axis=0), axis=0)
+    return np.minimum(cur, np.median(np.stack([prev, cur, nxt], axis=0), axis=0))
+
+
+def resize_rgba(arr: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+    """Resize straight-alpha RGBA without dragging the backdrop into the edge.
+
+    Resampling RGB and alpha independently mixes the colour of transparent
+    pixels into their opaque neighbours - and a transparent pixel here still
+    holds the screen's colour, so the sticker picks up a green rim on the way
+    down to output size. Premultiplying first weights each pixel's colour by its
+    own coverage, so transparent ones contribute nothing.
+    """
+    w, h = size
+    a = arr[..., 3].astype(np.float32) / 255.0
+    interp = cv2.INTER_AREA if (w < arr.shape[1] or h < arr.shape[0]) else cv2.INTER_LANCZOS4
+    pre = cv2.resize(arr[..., :3].astype(np.float32) * a[..., None], (w, h), interpolation=interp)
+    a_out = cv2.resize(a, (w, h), interpolation=interp)
+    rgb = pre / np.maximum(a_out, 1e-4)[..., None]
+    return np.dstack([np.clip(rgb, 0, 255), a_out * 255.0]).astype(np.uint8)
 
 
 def content_bbox(alpha: np.ndarray, threshold: float = 0.06) -> Optional[Tuple[int, int, int, int]]:

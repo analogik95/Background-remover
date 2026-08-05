@@ -35,10 +35,28 @@ that idea:
 - **The key is re-detected on every frame.** An animated backdrop — light rays,
   a flicker, a pulsing gradient — shifts the screen colour as the clip runs. One
   clip-wide key leaves patches of backdrop behind on the frames it doesn't fit.
-- **Despill** clamps the screen colour where it has bled onto the subject, so
-  edges don't keep a green rim.
-- **A 3-frame temporal median** on the matte removes the single-frame speckle a
-  per-frame network produces, without smearing genuine motion.
+- **The key's ramp is fitted to the footage, not guessed.** How far the subject's
+  colours sit from the key depends on the clip, so vidsticker measures it: the
+  neural matte labels confident foreground and background, and the ramp is set to
+  clear the screen's own spread and reach full opacity right where the subject's
+  colours begin. This is what makes **motion blur** work. A blurred edge is a
+  genuine mix of subject and screen and lands midway between them in colour; a
+  ramp that saturates before that midpoint writes every blurred edge out as
+  fully opaque backdrop.
+- **The screen is unmixed out of partly-covered pixels, not just despilled.** An
+  antialiased outline — and far more of a motion-blurred one — is literally
+  `C = α·F + (1−α)·S`. Solving that for `F` removes exactly the screen's share.
+  Despill only approximates it by clamping a channel, which on a half-screen
+  blurred edge is the difference between a green fringe and none.
+- **Temporal despeckling never adds coverage.** A per-frame network makes pixels
+  blink opaque for a single frame, and a 3-frame median removes that — but a
+  plain median also *invents* coverage. Where a limb moves fast, the frames
+  either side agree with each other while the current frame disagrees, so the
+  median paints the limb's other position onto this frame's backdrop. Clamping
+  the median to the current frame keeps the despeckling and drops the invention.
+- **Downscaling happens in premultiplied alpha.** Resampling colour and alpha
+  independently mixes transparent pixels — which still hold the screen's colour —
+  into their opaque neighbours, re-tinting the edge on the way to output size.
 - **One crop box for the whole clip**, taken from the union of every frame's
   content, so the sticker is tight but the subject never drifts or jitters
   inside the frame.
@@ -75,10 +93,10 @@ vidsticker clip.mp4 --start 2 --duration 4   # trim
 | `--model` | `isnet-general-use` (default), `isnet-anime`, `u2net_human_seg`, `birefnet-general`, … |
 | `--square` | pad the crop to a square canvas |
 | `--no-crop` | keep the original framing |
-| `--tolerance` / `--softness` | chroma radius kept transparent / width of the edge ramp |
-| `--despill` | screen-colour spill removal, `0`–`1` (default 0.8) |
+| `--tolerance` / `--softness` | chroma radius kept transparent / width of the edge ramp (both fitted per frame by default) |
+| `--despill` | strength of the screen-colour removal, `0`–`1` (default 0.8) |
 | `--shrink` / `--feather` | erode / blur the matte edge |
-| `--no-smooth` | disable the temporal median |
+| `--no-smooth` | disable the temporal despeckling |
 | `--alpha-threshold` | GIF alpha cutoff, `1`–`255` (default 128) |
 
 `vidsticker --help` lists the rest.
