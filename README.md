@@ -3,12 +3,17 @@
 Turn a video into a transparent animated sticker — GIF, WebP or APNG — with the
 background cut away.
 
-Comes as a CLI and a small browser UI.
+Comes as a CLI, a small browser UI, and a fully on-device Android app.
 
 ```bash
 vidsticker clip.mp4            # -> out/clip.gif + out/clip.webp
 vidsticker --serve             # -> browser UI on http://127.0.0.1:8000
 ```
+
+The [`android/`](android/) directory has a native Kotlin port that runs the
+same matting pipeline on-device — no server, works offline once the model is
+downloaded. See [`android/README.md`](android/README.md) for what's the same,
+what's rebuilt for a phone's memory budget, and what's verified so far.
 
 <p align="center">
   <img src="examples/luffy-sticker-preview.png" width="820" alt="Frames of the finished sticker on a checkerboard">
